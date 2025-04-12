@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Танчики со спрайтами</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #222;
+        }
+        canvas {
+            display: block;
+            background: #333;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="ui">
+        <div>Движение: ПРОБЕЛ (едет к курсору)</div>
+        <div>Стрельба: ЛКМ</div>
+        <div id="status">Статус: Ожидание</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusDisplay = document.getElementById('status');
+        
+        // Загрузка спрайтов
+        const assets = {
+            tank: new Image(),
+            bullet: new Image(),
+            loaded: 0
+        };
+        
+        assets.tank.src = 'images/tank.png'; // 80x80 пикселей
+        assets.bullet.src = 'images/bullet.png'; // 16x16 пикселей
+        
+        // Проверка загрузки
+        function assetLoaded() {
+            assets.loaded++;
+            if (assets.loaded === 2) {
+                statusDisplay.textContent = "Статус: Готов к игре";
+                gameLoop();
+            }
+        }
+        
+        assets.tank.onload = assetLoaded;
+        assets.bullet.onload = assetLoaded;
+        
+        const tank = {
+            x: 400,
+            y: 300,
+            angle: 0,
+            speed: 5,
+            width: 80,
+            height: 60,
+            moving: false,
+            targetReached: false
+        };
+        
+        const bullets = [];
+        let mouseX = 0, mouseY = 0;
+
+        // Управление
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                tank.moving = true;
+                tank.targetReached = false;
+                statusDisplay.textContent = "Статус: Движение к цели";
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') {
+                tank.moving = false;
+                statusDisplay.textContent = "Статус: Ожидание";
+            }
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+            
+            if (!tank.moving || !tank.targetReached) {
+                const dx = mouseX - tank.x;
+                const dy = mouseY - tank.y;
+                tank.angle = Math.atan2(dy, dx);
+            }
+        });
+        
+        canvas.addEventListener('click', () => {
+            if (assets.loaded === 2) { // Только если спрайты загружены
+                bullets.push({
+                    x: tank.x,
+                    y: tank.y,
+                    angle: tank.angle,
+                    speed: 10,
+                    width: 16,
+                    height: 8
+                });
+            }
+        });
+
+        function gameLoop() {
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        function update() {
+            if (tank.moving && !tank.targetReached && assets.loaded === 2) {
+                const dx = mouseX - tank.x;
+                const dy = mouseY - tank.y;
+                const distance = Math.sqrt(dx*dx + dy*dy);
+                
+                if (distance < 15) {
+                    tank.targetReached = true;
+                    tank.moving = false;
+                    statusDisplay.textContent = "Статус: Цель достигнута";
+                } else {
+                    const speed = Math.min(tank.speed, distance/5);
+                    tank.x += Math.cos(tank.angle) * speed;
+                    tank.y += Math.sin(tank.angle) * speed;
+                }
+            }
+            
+            // Границы
+            tank.x = Math.max(tank.width/2, Math.min(800 - tank.width/2, tank.x));
+            tank.y = Math.max(tank.height/2, Math.min(600 - tank.height/2, tank.y));
+            
+            // Обновление пуль
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                bullets[i].x += Math.cos(bullets[i].angle) * bullets[i].speed;
+                bullets[i].y += Math.sin(bullets[i].angle) * bullets[i].speed;
+                
+                if (bullets[i].x < -50 || bullets[i].x > 850 || 
+                    bullets[i].y < -50 || bullets[i].y > 650) {
+                    bullets.splice(i, 1);
+                }
+            }
+        }
+        
+        function render() {
+            // Очистка
+            ctx.fillStyle = '#333';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Сетка
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < canvas.width; x += 50) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += 50) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+            
+            // Пули
+            if (assets.loaded === 2) {
+                bullets.forEach(b => {
+                    ctx.save();
+                    ctx.translate(b.x, b.y);
+                    ctx.rotate(b.angle);
+                    ctx.drawImage(
+                        assets.bullet, 
+                        -b.width/2, -b.height/2, 
+                        b.width, b.height
+                    );
+                    ctx.restore();
+                });
+            }
+            
+            // Танк
+            if (assets.loaded === 2) {
+                ctx.save();
+                ctx.translate(tank.x, tank.y);
+                ctx.rotate(tank.angle);
+                
+                // Рисуем спрайт танка
+                ctx.drawImage(
+                    assets.tank,
+                    -tank.width/2, -tank.height/2,
+                    tank.width, tank.height
+                );
+                
+                // Индикатор состояния
+                if (tank.targetReached) {
+                    ctx.fillStyle = 'rgba(255, 87, 34, 0.5)';
+                    ctx.beginPath();
+                    ctx.arc(0, 0, tank.width/2, 0, Math.PI*2);
+                    ctx.fill();
+                }
+                
+                ctx.restore();
+            }
+            
+            // Курсор
+            ctx.fillStyle = 'rgba(255,255,255,0.7)';
+            ctx.beginPath();
+            ctx.arc(mouseX, mouseY, 5, 0, Math.PI*2);
+            ctx.fill();
+        }
+    </script>
+</body>
+</html>

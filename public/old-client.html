@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Мультиплеерные Танчики</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #222;
+            font-family: Arial;
+        }
+        canvas {
+            display: block;
+            background: #333;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #players {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="ui">
+        <div>Управление: ПРОБЕЛ (едет к курсору)</div>
+        <div>Стрельба: ЛКМ</div>
+        <div id="status">Подключение...</div>
+    </div>
+    <div id="players"></div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusDisplay = document.getElementById('status');
+        const playersList = document.getElementById('players');
+        
+        // Размеры спрайтов
+        const SPRITE_SIZES = {
+            tank: { width: 80, height: 60 },
+            bullet: { width: 8, height: 16 }
+        };
+        
+        // Game state
+        let playerId = null;
+        let gameState = {
+            players: {},
+            bullets: []
+        };
+        
+        // Controls
+        let keys = {};
+        let mouseX = 0, mouseY = 0;
+        
+        // Assets
+        const assets = {
+            tank: new Image(),
+            bullet: new Image(),
+            loaded: 0
+        };
+        
+        assets.tank.src = 'images/tank.png';
+        assets.bullet.src = 'images/bullet.png';
+        
+        function assetLoaded() {
+            assets.loaded++;
+            if (assets.loaded === 2) {
+                statusDisplay.textContent = "Готов к игре";
+            }
+        }
+        
+        assets.tank.onload = assetLoaded;
+        assets.bullet.onload = assetLoaded;
+        
+        // WebSocket connection
+        const ws = new WebSocket(`ws://${window.location.hostname}:8080`);
+        
+        ws.onopen = () => {
+            statusDisplay.textContent = "Подключено к серверу";
+        };
+        
+        ws.onerror = (error) => {
+            console.log(error);
+            statusDisplay.textContent = "Ошибка подключения";
+        };
+        
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            switch(data.type) {
+                case 'init':
+                    playerId = data.playerId;
+                    gameState = data.gameState;
+                    updatePlayersList();
+                    break;
+                    
+                case 'playerJoined':
+                    gameState.players[data.player.id] = data.player;
+                    updatePlayersList();
+                    break;
+                    
+                case 'playerUpdated':
+                    if (gameState.players[data.playerId]) {
+                        gameState.players[data.playerId] = {
+                            ...gameState.players[data.playerId],
+                            ...data.updates
+                        };
+                    }
+                    break;
+                    
+                case 'playerLeft':
+                    delete gameState.players[data.playerId];
+                    updatePlayersList();
+                    break;
+                    
+                case 'bulletFired':
+                    gameState.bullets.push(data.bullet);
+                    break;
+                    
+                case 'playerHit':
+                    // Можно добавить эффект попадания
+                    break;
+            }
+        };
+        
+        function updatePlayersList() {
+            playersList.innerHTML = '<strong>Игроки онлайн:</strong>';
+            for (const id in gameState.players) {
+                playersList.innerHTML += `<div>${gameState.players[id].nickname}</div>`;
+            }
+        }
+        
+        // Controls
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                keys['Space'] = true;
+                
+                if (playerId && gameState.players[playerId]) {
+                    gameState.players[playerId].moving = true;
+                    gameState.players[playerId].targetReached = false;
+                    
+                    ws.send(JSON.stringify({
+                        type: 'update',
+                        updates: {
+                            moving: true,
+                            targetReached: false
+                        }
+                    }));
+                }
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') {
+                keys['Space'] = false;
+                
+                if (playerId && gameState.players[playerId]) {
+                    gameState.players[playerId].moving = false;
+                    
+                    ws.send(JSON.stringify({
+                        type: 'update',
+                        updates: {
+                            moving: false
+                        }
+                    }));
+                }
+            }
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+            
+            if (playerId && gameState.players[playerId]) {
+                const dx = mouseX - gameState.players[playerId].x;
+                const dy = mouseY - gameState.players[playerId].y;
+                const angle = Math.atan2(dy, dx);
+                
+                gameState.players[playerId].angle = angle;
+                
+                ws.send(JSON.stringify({
+                    type: 'update',
+                    updates: {
+                        angle: angle
+                    }
+                }));
+            }
+        });
+        
+        canvas.addEventListener('click', () => {
+            if (playerId && gameState.players[playerId] && assets.loaded === 2) {
+                ws.send(JSON.stringify({
+                    type: 'shoot',
+                    x: gameState.players[playerId].x,
+                    y: gameState.players[playerId].y,
+                    angle: gameState.players[playerId].angle
+                }));
+            }
+        });
+
+        // Game loop
+        function gameLoop() {
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        function update() {
+            if (playerId && gameState.players[playerId]) {
+                const player = gameState.players[playerId];
+                
+                if (player.moving && !player.targetReached) {
+                    const dx = mouseX - player.x;
+                    const dy = mouseY - player.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < 15) {
+                        player.targetReached = true;
+                        player.moving = false;
+                        
+                        ws.send(JSON.stringify({
+                            type: 'update',
+                            updates: {
+                                moving: false,
+                                targetReached: true
+                            }
+                        }));
+                    } else {
+                        const speed = Math.min(5, distance / 5);
+                        player.x += Math.cos(player.angle) * speed;
+                        player.y += Math.sin(player.angle) * speed;
+                        
+                        ws.send(JSON.stringify({
+                            type: 'update',
+                            updates: {
+                                x: player.x,
+                                y: player.y
+                            }
+                        }));
+                    }
+                }
+            }
+        }
+        
+        function render() {
+            // Clear canvas
+            ctx.fillStyle = '#333';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw grid
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < canvas.width; x += 50) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += 50) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+            
+            // Draw bullets
+            if (assets.loaded === 2) {
+                gameState.bullets.forEach(bullet => {
+                    ctx.save();
+                    ctx.translate(bullet.x, bullet.y);
+                    ctx.rotate(bullet.angle);
+                    ctx.drawImage(
+                        assets.bullet, 
+                        -SPRITE_SIZES.bullet.width/2, 
+                        -SPRITE_SIZES.bullet.height/2,
+                        SPRITE_SIZES.bullet.width,
+                        SPRITE_SIZES.bullet.height
+                    );
+                    ctx.restore();
+                });
+            }
+            
+            // Draw players
+            if (assets.loaded === 2) {
+                for (const id in gameState.players) {
+                    const player = gameState.players[id];
+                    const isCurrentPlayer = id === playerId;
+                    
+                    ctx.save();
+                    ctx.translate(player.x, player.y);
+                    ctx.rotate(player.angle);
+                    
+                    // Draw tank (80x80)
+                    ctx.drawImage(
+                        assets.tank,
+                        -SPRITE_SIZES.tank.width/2,
+                        -SPRITE_SIZES.tank.height/2,
+                        SPRITE_SIZES.tank.width,
+                        SPRITE_SIZES.tank.height
+                    );
+                    
+                    // Draw status indicator
+                    if (player.targetReached) {
+                        ctx.fillStyle = 'rgba(255, 87, 34, 0.5)';
+                        ctx.beginPath();
+                        ctx.arc(0, 0, 30, 0, Math.PI*2);
+                        ctx.fill();
+                    }
+                    
+                    ctx.restore();
+                    
+                    // Draw nickname
+                    ctx.fillStyle = isCurrentPlayer ? '#4CAF50' : 'white';
+                    ctx.textAlign = 'center';
+                    ctx.font = '14px Arial';
+                    ctx.fillText(player.nickname, player.x, player.y + 50);
+                }
+            }
+            
+            // Draw mouse pointer
+            ctx.fillStyle = 'rgba(255,255,255,0.7)';
+            ctx.beginPath();
+            ctx.arc(mouseX, mouseY, 5, 0, Math.PI*2);
+            ctx.fill();
+        }
+        
+        // Start game when assets are loaded
+        const checkAssets = setInterval(() => {
+            if (assets.loaded === 2) {
+                clearInterval(checkAssets);
+                gameLoop();
+            }
+        }, 100);
+    </script>
+</body>
+</html>
