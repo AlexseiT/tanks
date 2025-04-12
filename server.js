@@ -3,7 +3,7 @@ const WebSocket = require('ws');
 const path = require('path');
 
 const app = express();
-const PORT = 8080;
+const PORT = 2345;
 
 const INITIAL_LIVES = 3;
 const RESPAWN_TIME = 5000;
